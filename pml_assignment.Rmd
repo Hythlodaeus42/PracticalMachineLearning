@@ -1,0 +1,126 @@
+---
+title: "Practical Machine Learning Assignment"
+output: html_document
+---
+
+### Executive Summary
+This analysis aims to classify how well an exercise is performed. Data was collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+
+From the training data set provided, 48 predictors were selected. As this is a classification problem, *Random Forests* was chosen as the method to fit the model.
+
+### Libraries
+```{r, message=FALSE}
+library(caret)
+library(randomForest)
+library(knitr)
+library(scales)
+```
+
+### Load Data
+```{r, echo=FALSE}
+if (!file.exists('pml-training.csv')) {
+  url.training = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(url = url.training, "pml-training.csv")
+}
+
+if (!file.exists('pml-testing.csv')) {
+  url.testing = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(url = url.testing, "pml-testing.csv")
+}
+```
+
+```{r}
+pml.training <- read.csv("pml-training.csv")
+pml.testing <- read.csv("pml-testing.csv")
+```
+
+### Exploratory Analysis
+A quick inspection of the *pml.training* set reveals a large number of *NA* values. These appear to be the aggregate values and only have values where the row has *new_window == "yes"*. We also examine the variability of each feature to select the predictors for our model.
+
+```{r, echo=FALSE, warning=FALSE}
+na.training <- sapply(
+  pml.training, 
+  function(x) sum(is.na(x) | x == "") / length(x)
+)
+
+nsv <- nearZeroVar(pml.training, saveMetrics = T)
+
+nal.all.render <- data.frame(cbind(names(na.training)[1:80], percent(na.training[1:80]), nsv$nzv[1:80], names(na.training)[81:159], percent(na.training[81:159]), nsv$nzv[81:159]))
+
+names(nal.all.render) <- c('Column', 'NA %', 'nzv', 'Column', 'NA %', 'nzv')
+rownames(nal.all.render) <- NULL
+
+kable(nal.all.render)
+```
+
+
+We settle on 48 raw measures which have no *NA* values, and exclude the row number (X), user name, timestamps and totals.
+```{r, echo=FALSE}
+cols <- names(na.training[na.training == 0])
+cols <- cols[!cols %in% c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")]
+cols <- cols[-grep("^total.", cols)]
+
+cols.table <- matrix(cols, 7, 7)
+colnames(cols.table) <- rep("Column", 7)
+kable(cols.table)
+```
+
+
+### Partition the Data
+To cross validate our results, we partition the training set, building our model on 75% of the initial data. 
+
+As we have decided to exclude the aggregate data, we will only use rows where *new_window == "no"*.
+```{r}
+intrain <- createDataPartition(
+  y=pml.training[pml.training$new_window == "no", "classe"], 
+  p = 0.75, 
+  list = FALSE
+)
+training <- pml.training[pml.training$new_window == "no", ][intrain, cols]
+testing <- pml.training[pml.training$new_window == "no", ][-intrain, cols]
+```
+
+### Training the Model
+As this is a classification problem, *Random Forests* is chosen as the algorithm. 
+```{r}
+model.training.rf <- randomForest(classe ~ ., data = training)
+
+model.training.rf
+```
+```{r, echo=FALSE}
+accuracy.training <- sum(diag(model.training.rf$confusion)) / sum(model.training.rf$confusion)
+oob.training <- 1 - accuracy.training
+```
+We can see that the out of bag error on the training set is `r percent(oob.training)`. 
+
+Next, we plot the variable importance measured by the model.
+```{r, echo=FALSE}
+varImpPlot(model.training.rf)
+```
+
+### Testing the Model
+We now cross validate our model on the remaining 25% of the original training data. 
+```{r}
+predict.testing <- predict(model.training.rf, testing)
+```
+```{r, echo=FALSE}
+confusion.testing <- table(predict.testing, testing$classe)
+accuracy.testing <- sum(diag(confusion.testing)) / sum(confusion.testing)
+
+oob.testing <- 1 - accuracy.testing
+```
+Testing confusion matrix.
+```{r, echo=FALSE}
+confusion.testing
+```
+
+The estimate for the out of sample error is `r percent(oob.testing)`. 
+
+
+### Predict Submission Results
+Finally, we predict the class for the 20 samples in the *pml-testing.csv* file.
+```{r}
+predict.submission <- predict(model.training.rf, pml.testing)
+```
+
+
